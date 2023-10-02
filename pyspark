@@ -1,0 +1,135 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC
+# MAGIC ## Overview
+# MAGIC
+# MAGIC This notebook will show you how to create and query a table or DataFrame that you uploaded to DBFS. [DBFS](https://docs.databricks.com/user-guide/dbfs-databricks-file-system.html) is a Databricks File System that allows you to store data for querying inside of Databricks. This notebook assumes that you have a file already inside of DBFS that you would like to read from.
+# MAGIC
+# MAGIC This notebook is written in **Python** so the default cell type is Python. However, you can use different languages by using the `%LANGUAGE` syntax. Python, Scala, SQL, and R are all supported.
+
+# COMMAND ----------
+
+# File location and type
+file_location_user = "/FileStore/tables/technical_assessment_user_purchases.csv"
+file_type_user = "csv"
+
+# CSV options
+infer_schema_user = "true"
+first_row_is_header_user = "true"
+delimiter_user = ";"
+
+# The applied options are for CSV files. For other file types, these will be ignored.
+df_purchase_user = spark.read.format(file_type_user) \
+  .option("inferSchema", infer_schema_user) \
+  .option("header", first_row_is_header_user) \
+  .option("sep", delimiter_user) \
+  .load(file_location_user)
+
+display(df_purchase_user)
+
+# COMMAND ----------
+
+
+
+# File location and type
+file_location_booking = "/FileStore/tables/technical_assessment_user_bookings.csv"
+file_type_booking = "csv"
+
+# CSV options
+infer_schema_booking = "true"
+first_row_is_header_booking = "true"
+delimiter_booking = ";"
+
+# The applied options are for CSV files. For other file types, these will be ignored.
+df_booking = spark.read.format(file_type_booking) \
+  .option("inferSchema", infer_schema_booking) \
+  .option("header", first_row_is_header_booking) \
+  .option("sep", delimiter_booking) \
+  .load(file_location_booking)
+
+display(df_booking)
+
+# COMMAND ----------
+
+#duplicate count before drop
+df_booking.count()
+
+# COMMAND ----------
+
+booking_data = df_booking.dropDuplicates()
+purchase_data = df_purchase_user.dropDuplicates()
+
+# COMMAND ----------
+
+#  Step 2: Remove unnecessary fields
+booking_data = booking_data.select('uuid', 'user', 'startDate', 'startTime', 'endDate', 'endTime', 'state', 'createdAt', 'sport', 'origin')
+purchase_data = purchase_data.select('user', 'amount', 'paid', 'issueDate', 'type', 'showVat', 'wasDownloaded', 'taxAmounts')
+
+
+# COMMAND ----------
+
+from pyspark.sql.functions import sum, count, min, max
+from pyspark.sql.window import Window
+from pyspark.sql import functions as F
+
+# COMMAND ----------
+
+#Total revenue per customer
+total_revenue_per_customer = joined_table.groupBy('user').agg(sum('amount').alias('total_revenue'))
+total_revenue_per_customer.count()
+total_revenue_per_customer.show()
+
+# COMMAND ----------
+
+# b. Number of activities per customer
+activities_per_customer = booking_data.groupBy('user').agg(count('uuid').alias('num_activities'))
+activities_per_customer.show()
+
+# COMMAND ----------
+
+# c. Hours spent with sports per customer (assuming you have a 'start time' and 'end time' in your dataset)
+# booking_data = booking_data.withColumn('start_datetime', F.concat_ws(' ', 'startDate', 'startTime'))
+# booking_data = booking_data.withColumn('end_datetime', F.concat_ws(' ', 'endDate', 'endTime'))
+# booking_data = booking_data.withColumn('start_datetime', F.to_timestamp('start_datetime', 'yyyy-MM-dd HH:mm:ss'))
+# booking_data = booking_data.withColumn('end_datetime', F.to_timestamp('end_datetime', 'yyyy-MM-dd HH:mm:ss'))
+
+booking_data = booking_data.filter(booking_data.state == "accepted")
+booking_data.show()
+hours_spent_per_customer = booking_data.groupBy('user').agg(sum(F.col('endTime') - F.col('startTime')).alias('total_hours_spent'))
+
+
+# COMMAND ----------
+
+hours_spent_per_customer.show()
+
+# COMMAND ----------
+
+hours_spent_per_customer = booking_data.groupBy('user').agg(sum(F.unix_timestamp(F.col('endTime')) - F.unix_timestamp(F.col('startTime'))).alias('total_hours_spent'))
+
+# COMMAND ----------
+
+# d. First activity datetime per customer
+first_activity_datetime = booking_data.groupBy('user').agg(min('startTime').alias('first_activity_datetime'))
+first_activity_datetime.show()
+
+# COMMAND ----------
+
+# e. Last activity datetime per customer
+last_activity_datetime = booking_data.groupBy('user').agg(max('endTime').alias('last_activity_datetime'))
+last_activity_datetime.show()
+
+# COMMAND ----------
+
+# Joining all the aggregated data together
+result = total_revenue_per_customer.join(activities_per_customer, 'user', 'inner') \
+    .join(hours_spent_per_customer, 'user', 'inner') \
+    .join(first_activity_datetime, 'user', 'inner') \
+    .join(last_activity_datetime, 'user', 'inner')
+
+# COMMAND ----------
+
+result.show()
+
+# COMMAND ----------
+
+result.write.csv('customer_aggregated_data.csv', header=True)
